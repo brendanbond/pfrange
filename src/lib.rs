@@ -333,8 +333,9 @@ pub mod parser {
     }
 
     #[derive(Debug, PartialEq, PartialOrd)]
-    enum ParseError {
+    pub enum ParseError {
         InvalidToken(String),
+        InvalidRange(String),
         EndOfLine,
     }
 
@@ -342,14 +343,15 @@ pub mod parser {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
                 ParseError::InvalidToken(string) => write!(f, "Unexpected token: {}", string),
+                ParseError::InvalidRange(string) => write!(f, "Invalid range: {}", string),
                 ParseError::EndOfLine => write!(f, "Unexpected end of line"),
             }
         }
     }
 
-    type ParseResult<T> = Result<T, ParseError>;
+    pub type ParseResult<T> = Result<T, ParseError>;
 
-    struct Parser {
+    pub struct Parser {
         characters: Vec<char>,
         cursor: usize,
     }
@@ -399,7 +401,14 @@ pub mod parser {
             let hand = self.parse_hand()?;
             match self.peek() {
                 Some('+') => Ok(self.get_gte_hands(&hand)),
-                Some('-') => Ok(self.get_lte_hands(&hand)),
+                Some('-') => {
+                    self.pop();
+                    let second_hand = self.parse_hand()?;
+                    match self.get_hands_between(&hand, &second_hand) {
+                        Ok(hands) => return Ok(hands),
+                        Err(err) => return Err(err),
+                    }
+                }
                 Some(other_character) => Err(ParseError::InvalidToken(other_character.to_string())),
                 None => {
                     if !hand.is_pair() && hand.matches_suited_type(&SuitedType::None) {
@@ -478,19 +487,51 @@ pub mod parser {
                 .collect()
         }
 
-        fn get_lte_hands(&self, hand: &Hand) -> Vec<Hand> {
-            if hand.matches_suited_type(&SuitedType::None) && !hand.is_pair() {
-                let suited_hand = Hand::from_hand(hand, SuitedType::Suited);
-                let offsuit_hand = Hand::from_hand(hand, SuitedType::Offsuit);
-                return Vec::from(VALID_HANDS)
+        // fn get_lte_hands(&self, hand: &Hand) -> Vec<Hand> {
+        //     if hand.matches_suited_type(&SuitedType::None) && !hand.is_pair() {
+        //         let hand_suited = Hand::from_hand(hand, SuitedType::Suited);
+        //         let hand_offsuit = Hand::from_hand(hand, SuitedType::Offsuit);
+        //         return Vec::from(VALID_HANDS)
+        //             .into_iter()
+        //             .filter(|valid_hand| valid_hand <= &hand_suited || valid_hand <= &hand_offsuit)
+        //             .collect();
+        //     }
+        //     Vec::from(VALID_HANDS)
+        //         .into_iter()
+        //         .filter(|valid_hand| valid_hand <= hand && valid_hand.matches_suited_type(&hand.2))
+        //         .collect()
+        // }
+
+        fn get_hands_between(
+            &self,
+            first_hand: &Hand,
+            second_hand: &Hand,
+        ) -> ParseResult<Vec<Hand>> {
+            if first_hand.matches_suited_type(&SuitedType::None) && !first_hand.is_pair() {
+                if second_hand.matches_suited_type(&SuitedType::None) && !second_hand.is_pair() {
+                    return Err(ParseError::InvalidRange("Can't specify a range between an offsuit (or pair) hand and a suited pair.".to_string()));
+                }
+                let first_hand_suited = Hand::from_hand(first_hand, SuitedType::Suited);
+                let first_hand_offsuit = Hand::from_hand(first_hand, SuitedType::Offsuit);
+                let second_hand_suited = Hand::from_hand(second_hand, SuitedType::Suited);
+                let second_hand_offsuit = Hand::from_hand(second_hand, SuitedType::Offsuit);
+                return Ok(Vec::from(VALID_HANDS)
                     .into_iter()
-                    .filter(|valid_hand| valid_hand <= &suited_hand || valid_hand <= &offsuit_hand)
-                    .collect();
+                    .filter(|valid_hand| {
+                        (valid_hand >= &first_hand_suited && valid_hand <= &second_hand_suited)
+                            || valid_hand >= &first_hand_offsuit
+                                && valid_hand <= &second_hand_offsuit
+                    })
+                    .collect());
             }
-            Vec::from(VALID_HANDS)
+            Ok(Vec::from(VALID_HANDS)
                 .into_iter()
-                .filter(|valid_hand| valid_hand <= hand && valid_hand.matches_suited_type(&hand.2))
-                .collect()
+                .filter(|valid_hand| {
+                    (valid_hand >= first_hand && valid_hand.matches_suited_type(&first_hand.2))
+                        && (valid_hand <= second_hand
+                            && valid_hand.matches_suited_type(&second_hand.2))
+                })
+                .collect())
         }
     }
 
